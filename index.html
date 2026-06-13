@@ -42,6 +42,7 @@
             
             // Gestione API Key sicura
             const [apiKey, setApiKey] = useState('');
+            const [apiModel, setApiModel] = useState('gemini-1.5-flash-latest'); // Nuovo stato per il modello
             const [showApiKeyInput, setShowApiKeyInput] = useState(true);
 
             // Stato UI per espandere il testo originale nei risultati
@@ -51,15 +52,20 @@
             // Carica la chiave API dal localStorage all'avvio
             useEffect(() => {
                 const savedKey = localStorage.getItem('gemini_api_key');
+                const savedModel = localStorage.getItem('gemini_api_model');
                 if (savedKey) {
                     setApiKey(savedKey);
                     setShowApiKeyInput(false);
+                }
+                if (savedModel) {
+                    setApiModel(savedModel);
                 }
             }, []);
 
             const saveApiKey = () => {
                 if (apiKey.trim()) {
                     localStorage.setItem('gemini_api_key', apiKey.trim());
+                    localStorage.setItem('gemini_api_model', apiModel);
                     setShowApiKeyInput(false);
                     setError(null);
                 }
@@ -123,8 +129,8 @@
                 };
 
                 try {
-                    // Utilizziamo il modello 1.5-flash che è stabile e accessibile da tutte le chiavi pubbliche
-                    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+                    // Utilizziamo il modello selezionato dall'utente dalla tendina
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/${apiModel}:generateContent?key=${apiKey}`;
                     const data = await fetchWithRetry(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
 
                     const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -368,14 +374,23 @@
                                     Per usare questo tool devi inserire la tua chiave API di Google Gemini. Puoi ottenerla gratis su <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline font-bold">Google AI Studio</a>.
                                     Questa chiave resterà salvata solo nel tuo browser in modo totalmente sicuro.
                                 </p>
-                                <div className="flex flex-col sm:flex-row gap-3">
+                                <div className="flex flex-col md:flex-row gap-3">
                                     <input 
                                         type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
                                         placeholder="Incolla qui la tua API Key (es. AIzaSy...)" 
                                         className="flex-grow p-3 rounded-xl border border-blue-300 focus:ring-2 focus:ring-blue-500 text-sm"
                                     />
-                                    <button onClick={saveApiKey} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors">
-                                        <i className="fa-solid fa-floppy-disk"></i> Salva
+                                    <select 
+                                        value={apiModel} onChange={(e) => setApiModel(e.target.value)}
+                                        className="p-3 rounded-xl border border-blue-300 focus:ring-2 focus:ring-blue-500 text-sm bg-white text-slate-700 font-medium"
+                                    >
+                                        <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash (Consigliato, Veloce)</option>
+                                        <option value="gemini-1.5-pro-latest">Gemini 1.5 Pro (Più lento ma accurato)</option>
+                                        <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                                        <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (Sperimentale)</option>
+                                    </select>
+                                    <button onClick={saveApiKey} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors whitespace-nowrap">
+                                        <i className="fa-solid fa-floppy-disk"></i> Salva Configurazione
                                     </button>
                                 </div>
                             </div>
