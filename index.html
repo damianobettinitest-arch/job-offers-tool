@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recruiter AI Suite</title>
+    
+    <!-- Tailwind CSS per lo stile (caricato via CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome per le icone (caricato via CDN) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- React e ReactDOM (caricati via CDN) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel per far funzionare il codice React nel browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+    <!-- Il contenitore dove React inietterà l'app -->
+    <div id="root"></div>
+
+    <!-- Il codice dell'applicazione -->
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        const App = () => {
+            // Stati principali
+            const [inputText, setInputText] = useState('');
+            const [inputUrl, setInputUrl] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState(null);
+            const [results, setResults] = useState([]); 
+            const [exporting, setExporting] = useState(false);
+            const [activeTab, setActiveTab] = useState('extract'); // 'extract' | 'analytics'
+            
+            // Gestione API Key sicura
+            const [apiKey, setApiKey] = useState('');
+            const [showApiKeyInput, setShowApiKeyInput] = useState(true);
+
+            // Stato UI per espandere il testo originale nei risultati
+            const [expandedTextIndex, setExpandedTextIndex] = useState(null);
+            const fileInputRef = useRef(null);
+
+            // Carica la chiave API dal localStorage all'avvio
+            useEffect(() => {
+                const savedKey = localStorage.getItem('gemini_api_key');
+                if (savedKey) {
+                    setApiKey(savedKey);
+                    setShowApiKeyInput(false);
+                }
+            }, []);
+
+            const saveApiKey = () => {
+                if (apiKey.trim()) {
+                    localStorage.setItem('gemini_api_key', apiKey.trim());
+                    setShowApiKeyInput(false);
+                }
+            };
+
+            const fetchWithRetry = async (url, options, retries = 5) => {
+                let delay = 1000;
+                for (let i = 0; i < retries; i++) {
+                    try {
+                        const response = await fetch(url, options);
+                        if (!response.ok) throw new Error(`Errore di rete: ${response.status}`);
+                        return await response.json();
+                    } catch (err) {
+                        if (i === retries - 1) throw err;
+                        await new Promise(res => setTimeout(res, delay));
+                        delay *= 2;
+                    }
+                }
+            };
+
+            const analyzeJobPosting = async () => {
+                if (!apiKey) {
+                    setError("Devi inserire una chiave API di Gemini.");
+                    setShowApiKeyInput(true);
+                    return;
+                }
+                if (!inputText.trim()) {
+                    setError("Per favore, incolla il testo dell'annuncio prima di analizzare.");
+                    return;
+                }
+
+                setLoading(true);
+                setError(null);
+
+                const schema = {
+                    type: "OBJECT",
+                    properties: {
+                        posizione: { type: "STRING" },
+                        azienda: { type: "STRING" },
+                        sede: { type: "STRING" },
+                        job_description: { type: "STRING" },
+                        ral: { type: "STRING" },
+                        anni_esperienza: { type: "STRING" },
+                        competenze: { type: "ARRAY", items: { type: "STRING" } },
+                        titolo_studio: { type: "STRING" },
+                        benefit: { type: "ARRAY", items: { type: "STRING" } }
+                    },
+                    required: ["posizione", "azienda", "sede", "job_description", "ral", "anni_esperienza", "competenze", "titolo_studio", "benefit"]
+                };
+
+                const payload = {
+                    contents: [{
+                        parts: [{ text: `Sei un esperto HR. Analizza il seguente testo di un annuncio di lavoro ed estrapola i dati richiesti. Se un dato non è presente, scrivi "Non specificato".\n\nTesto:\n${inputText}` }]
+                    }],
+                    generationConfig: { responseMimeType: "application/json", responseSchema: schema }
+                };
+
+                try {
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                    const data = await fetchWithRetry(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+
+                    const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (jsonText) {
+                        const parsedResult = JSON.parse(jsonText);
+                        // Salviamo anche url, il testo originale completo e la data di inserimento
+                        const completeResult = { 
+                            ...parsedResult, 
+                            url: inputUrl, 
+                            testo_originale: inputText,
+                            data_inserimento: new Date().toLocaleString('it-IT') // Registra data e ora correnti
+                        };
+                        setResults(prev => [completeResult, ...prev]);
+                        setInputText(''); 
+                        setInputUrl(''); 
+                    } else {
+                        throw new Error("Risposta non valida dall'API.");
+                    }
+                } catch (err) {
+                    console.error(err);
+                    setError("Si è verificato un errore. Assicurati che la tua API Key di Gemini sia valida.");
+                    if(err.message && (err.message.includes("400") || err.message.includes("403"))) setShowApiKeyInput(true);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const fillExample = () => {
+                setInputUrl('https://www.linkedin.com/jobs/view/1234567890/');
+                setInputText(`Siamo alla ricerca di un Senior Digital Marketing Specialist per Milano (ibrido). Azienda leader nel tech.\n\nSvilupperai strategie SEO/SEM e coordinerai il team Analytics.\nRichiediamo ottima conoscenza di Google Ads, SEO, Analytics. \nAlmeno 4 anni di esperienza.\n\nOffriamo:\n- RAL tra 40k e 50.000€\n- Buoni pasto da 8€\n- Assicurazione integrativa`);
+            };
+
+            // -------------------------
+            // ESPORTAZIONE / IMPORTAZIONE CSV
+            // -------------------------
+            
+            const headersList = ["Posizione", "Azienda", "Sede", "Job Description", "RAL / Offerta", "Anni Esperienza", "Competenze Richieste", "Titolo di studio", "Benefit", "URL Annuncio", "Testo Originale", "Data Inserimento"];
+
+            const downloadCSV = () => {
+                if (results.length === 0) return;
+                try {
+                    setExporting(true);
+                    const escapeCSV = (str) => {
+                        if (str === null || str === undefined) return '""';
+                        return `"${String(str).replace(/"/g, '""')}"`;
+                    };
+                    const csvRows = [headersList.map(escapeCSV).join(",")];
+                    results.forEach(res => {
+                        const row = [
+                            res.posizione, res.azienda, res.sede, res.job_description, res.ral, 
+                            res.anni_esperienza, res.competenze.join(", "), res.titolo_studio, 
+                            res.benefit.join(", "), res.url || "", res.testo_originale || "", res.data_inserimento || ""
+                        ];
+                        csvRows.push(row.map(escapeCSV).join(","));
+                    });
+                    const csvContent = "\uFEFF" + csvRows.join("\n");
+                    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement("a");
+                    link.href = url;
+                    link.setAttribute("download", `annunci_HR_${new Date().getTime()}.csv`);
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                } catch (err) {
+                    alert("Errore durante l'esportazione.");
+                } finally {
+                    setExporting(false);
+                }
+            };
+
+            const parseCSV = (text) => {
+                const result = [];
+                let row = [];
+                let inQuotes = false;
+                let value = '';
+                // Rimuove BOM se presente
+                const cleanText = text.replace(/^\uFEFF/, '');
+                
+                for (let i = 0; i < cleanText.length; i++) {
+                    const char = cleanText[i];
+                    if (char === '"') {
+                        if (inQuotes && cleanText[i+1] === '"') {
+                            value += '"';
+                            i++;
+                        } else {
+                            inQuotes = !inQuotes;
+                        }
+                    } else if (char === ',' && !inQuotes) {
+                        row.push(value);
+                        value = '';
+                    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+                        if (char === '\r' && cleanText[i+1] === '\n') i++; 
+                        row.push(value);
+                        if (row.some(r => r.trim() !== '')) result.push(row);
+                        row = [];
+                        value = '';
+                    } else {
+                        value += char;
+                    }
+                }
+                if (value || row.length > 0) {
+                    row.push(value);
+                    if (row.some(r => r.trim() !== '')) result.push(row);
+                }
+                return result;
+            };
+
+            const handleFileUpload = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const text = e.target.result;
+                        const rows = parseCSV(text);
+                        if (rows.length < 2) throw new Error("Il file sembra vuoto o non valido.");
+                        
+                        // Mappa le righe in oggetti (ignorando l'intestazione rows[0])
+                        const importedResults = rows.slice(1).map(row => ({
+                            posizione: row[0] || '',
+                            azienda: row[1] || '',
+                            sede: row[2] || '',
+                            job_description: row[3] || '',
+                            ral: row[4] || '',
+                            anni_esperienza: row[5] || '',
+                            competenze: row[6] ? row[6].split(',').map(s => s.trim()) : [],
+                            titolo_studio: row[7] || '',
+                            benefit: row[8] ? row[8].split(',').map(s => s.trim()) : [],
+                            url: row[9] || '',
+                            testo_originale: row[10] || '',
+                            data_inserimento: row[11] || '' // Legge la data se presente
+                        }));
+
+                        setResults(prev => [...importedResults, ...prev]);
+                        alert(`${importedResults.length} annunci importati con successo!`);
+                    } catch (err) {
+                        alert("Errore nella lettura del CSV. Assicurati che sia il file generato da questo tool.");
+                    }
+                    // Reset input
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                };
+                reader.readAsText(file);
+            };
+
+            const removeResult = (indexToRemove) => setResults(prev => prev.filter((_, idx) => idx !== indexToRemove));
+
+            // -------------------------
+            // MOTORE DI ANALISI DATI E RAL
+            // -------------------------
+            const analyticsData = useMemo(() => {
+                if (results.length === 0) return null;
+
+                // Funzione intelligente per estrarre numeri dalla stringa RAL (es. "Da 40k a 50.000€")
+                const extractAverageRalNumber = (ralString) => {
+                    if (!ralString || ralString.toLowerCase().includes('non specificat')) return null;
+                    
+                    // Cerca pattern come "45000", "45.000", "45k"
+                    const regex = /\b\d{2,3}(?:\.\d{3}|\d{3}|[kK])\b/g;
+                    const matches = ralString.match(regex);
+                    
+                    if (!matches) return null;
+
+                    const numbers = matches.map(m => {
+                        const clean = m.toLowerCase();
+                        if (clean.endsWith('k')) return parseInt(clean) * 1000;
+                        return parseInt(clean.replace(/\./g, ''));
+                    }).filter(n => n >= 15000 && n <= 250000); // Filtro sicurezza per evitare anni o numeri a caso
+
+                    if (numbers.length === 0) return null;
+                    // Se trova un range, fa la media (es. 40k e 50k -> 45000)
+                    const sum = numbers.reduce((a, b) => a + b, 0);
+                    return sum / numbers.length;
+                };
+
+                let totalRalSum = 0;
+                let totalRalCount = 0;
+
+                const keywordsList = [
+                    'Marketing', 'SEO', 'SEM', 'Manager', 'Specialist', 'Strategist', 
+                    'Analytics', 'Digital', 'Developer', 'Engineer', 'Data', 'Designer', 'HR'
+                ];
+                
+                const keywordStats = {};
+                keywordsList.forEach(k => keywordStats[k] = { sum: 0, count: 0, foundInPositions: 0 });
+
+                results.forEach(item => {
+                    const avgRal = extractAverageRalNumber(item.ral);
+                    const posLower = (item.posizione || '').toLowerCase();
+                    
+                    if (avgRal) {
+                        totalRalSum += avgRal;
+                        totalRalCount++;
+                    }
+
+                    keywordsList.forEach(k => {
+                        if (posLower.includes(k.toLowerCase())) {
+                            keywordStats[k].foundInPositions++;
+                            if (avgRal) {
+                                keywordStats[k].sum += avgRal;
+                                keywordStats[k].count++;
+                            }
+                        }
+                    });
+                });
+
+                const globalAvg = totalRalCount > 0 ? Math.round(totalRalSum / totalRalCount) : 0;
+                
+                const keywordAverages = Object.keys(keywordStats)
+                    .filter(k => keywordStats[k].foundInPositions > 0)
+                    .map(k => ({
+                        keyword: k,
+                        avgRal: keywordStats[k].count > 0 ? Math.round(keywordStats[k].sum / keywordStats[k].count) : null,
+                        count: keywordStats[k].foundInPositions
+                    }))
+                    .sort((a, b) => (b.avgRal || 0) - (a.avgRal || 0));
+
+                return {
+                    globalAvg,
+                    totalAnnunci: results.length,
+                    totalAnnunciConRal: totalRalCount,
+                    keywordAverages
+                };
+            }, [results]);
+
+            return (
+                <div className="min-h-screen bg-slate-50 text-slate-900 p-3 sm:p-4 md:p-8 font-sans">
+                    <div className="max-w-6xl mx-auto space-y-4 md:space-y-6">
+                        
+                        {/* API Key Panel */}
+                        {showApiKeyInput && (
+                            <div className="bg-blue-50 rounded-2xl shadow-sm border border-blue-200 p-5 md:p-6 mb-6">
+                                <h3 className="text-lg font-bold text-blue-900 flex items-center gap-2 mb-3">
+                                    <i className="fa-solid fa-key text-lg"></i> Configurazione API Key
+                                </h3>
+                                <p className="text-sm text-blue-800 mb-4">
+                                    Per usare questo tool devi inserire la tua chiave API di Google Gemini. Puoi ottenerla gratis su <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline font-bold">Google AI Studio</a>.
+                                    Questa chiave resterà salvata solo nel tuo browser in modo totalmente sicuro.
+                                </p>
+                                <div className="flex flex-col sm:flex-row gap-3">
+                                    <input 
+                                        type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                                        placeholder="Incolla qui la tua API Key (es. AIzaSy...)" 
+                                        className="flex-grow p-3 rounded-xl border border-blue-300 focus:ring-2 focus:ring-blue-500 text-sm"
+                                    />
+                                    <button onClick={saveApiKey} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors">
+                                        <i className="fa-solid fa-floppy-disk"></i> Salva
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Header & Tabs */}
+                        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="p-5 md:p-8 relative border-b border-slate-100">
+                                {!showApiKeyInput && (
+                                    <button onClick={() => setShowApiKeyInput(true)} className="absolute top-4 right-4 text-xs text-slate-400 hover:text-blue-600 flex items-center gap-1">
+                                        <i className="fa-solid fa-key"></i> Modifica API
+                                    </button>
+                                )}
+                                <h1 className="text-2xl md:text-3xl font-bold text-slate-800 flex items-center gap-3">
+                                    <i className="fa-solid fa-briefcase text-3xl text-blue-600 shrink-0"></i>
+                                    Recruiter AI Suite
+                                </h1>
+                                <p className="mt-2 text-sm md:text-base text-slate-600">
+                                    Estrai dati dagli annunci, archivia il testo originale e analizza le tendenze di mercato.
+                                </p>
+                            </div>
+                            <div className="flex bg-slate-50 p-2 gap-2 overflow-x-auto">
+                                <button 
+                                    onClick={() => setActiveTab('extract')}
+                                    className={`flex items-center gap-2 px-6 py-3 rounded-xl font-medium text-sm transition-all whitespace-nowrap ${activeTab === 'extract' ? 'bg-white shadow-sm text-blue-700 border border-slate-200' : 'text-slate-600 hover:bg-slate-200/50'}`}
+                                >
+                                    <i className="fa-solid fa-circle-plus"></i> Estrazione & Coda
+                                </button>
+                                <button 
+                                    onClick={() => setActiveTab('analytics')}
+                                    className={`flex items-center gap-2 px-6 py-3 rounded-xl font-medium text-sm transition-all whitespace-nowrap ${activeTab === 'analytics' ? 'bg-white shadow-sm text-blue-700 border border-slate-200' : 'text-slate-600 hover:bg-slate-200/50'}`}
+                                >
+                                    <i className="fa-solid fa-chart-column"></i> Statistiche & Dashboard
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* CONTENT TABS */}
+                        {activeTab === 'extract' && (
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6 items-start">
+                                
+                                {/* Input Section */}
+                                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 md:p-6 flex flex-col lg:sticky lg:top-6">
+                                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-2 mb-4">
+                                        <label className="block text-sm font-semibold text-slate-700">Dettagli Annuncio</label>
+                                        <button onClick={fillExample} className="text-sm sm:text-xs text-blue-600 hover:text-blue-800 underline font-medium self-start sm:self-auto">
+                                            Usa un testo di esempio
+                                        </button>
+                                    </div>
+                                    
+                                    <input
+                                        type="url" value={inputUrl} onChange={(e) => setInputUrl(e.target.value)}
+                                        placeholder="URL dell'annuncio (opzionale, es. https://linkedin.com/...)"
+                                        className="w-full mb-3 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm text-slate-700"
+                                    />
+
+                                    <textarea
+                                        value={inputText} onChange={(e) => setInputText(e.target.value)}
+                                        placeholder="Incolla l'intero corpo dell'annuncio di lavoro qui..."
+                                        className="w-full flex-grow min-h-[250px] lg:min-h-[350px] p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none text-sm text-slate-700"
+                                    />
+                                    
+                                    <button
+                                        onClick={analyzeJobPosting}
+                                        disabled={loading || !inputText.trim() || showApiKeyInput}
+                                        className="mt-4 w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-semibold py-3.5 px-6 rounded-xl shadow-sm transition-colors flex justify-center items-center gap-2 text-sm md:text-base"
+                                    >
+                                        {loading ? <><i className="fa-solid fa-spinner fa-spin"></i> Analisi in corso...</> : <><i className="fa-solid fa-circle-plus"></i> Estrai e Aggiungi in Coda</>}
+                                    </button>
+                                    {error && <p className="mt-4 text-red-600 text-sm font-medium text-center bg-red-50 p-3 rounded-lg border border-red-100">{error}</p>}
+                                </div>
+
+                                {/* Results Queue Section */}
+                                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 md:p-6 flex flex-col max-h-[85vh]">
+                                    <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100 shrink-0">
+                                        <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                            <i className="fa-solid fa-layer-group text-blue-600"></i> Coda Estrazioni ({results.length})
+                                        </h2>
+                                    </div>
+
+                                    <div className="overflow-y-auto flex-grow pr-2 space-y-6">
+                                        {results.length === 0 && !loading && (
+                                            <div className="h-full min-h-[250px] flex flex-col items-center justify-center text-slate-400 text-center p-4">
+                                                <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4 border border-slate-100"><i className="fa-solid fa-briefcase text-3xl opacity-40"></i></div>
+                                                <p className="font-medium text-slate-500">Nessun dato in coda</p>
+                                            </div>
+                                        )}
+                                        
+                                        {loading && (
+                                            <div className="h-[200px] flex flex-col items-center justify-center text-blue-500 text-center p-4 bg-blue-50/50 rounded-xl border border-blue-100 mb-6">
+                                                <i className="fa-solid fa-spinner fa-spin text-4xl mb-4"></i>
+                                                <p className="animate-pulse font-medium">L'AI sta analizzando il testo...</p>
+                                            </div>
+                                        )}
+
+                                        {results.map((resultItem, index) => (
+                                            <div key={index} className="space-y-0 animate-in fade-in duration-300 text-sm md:text-base border border-slate-200 rounded-xl overflow-hidden relative group">
+                                                <div className="bg-slate-100 px-4 py-3 flex justify-between items-center border-b border-slate-200">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="font-bold text-slate-700">Annuncio #{results.length - index}</span>
+                                                        {resultItem.data_inserimento && (
+                                                            <span className="text-xs text-slate-500 flex items-center gap-1 font-medium bg-slate-200/70 px-2 py-0.5 rounded-md">
+                                                                <i className="fa-regular fa-calendar"></i> {resultItem.data_inserimento}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <button onClick={() => removeResult(index)} className="text-slate-400 hover:text-red-600 transition-colors p-1"><i className="fa-solid fa-trash-can"></i></button>
+                                                </div>
+                                                <div className="px-4 py-2">
+                                                    {resultItem.url && (
+                                                        <div className="flex flex-col sm:flex-row sm:items-start py-3 border-b border-slate-100 gap-1 sm:gap-4">
+                                                            <div className="font-semibold text-slate-700 sm:w-1/3 flex items-center gap-2.5"><div className="bg-slate-100 p-1.5 rounded-md w-7 h-7 flex items-center justify-center"><i className="fa-solid fa-link text-slate-500 text-xs"></i></div> Link</div>
+                                                            <div className="text-blue-600 sm:w-2/3 truncate"><a href={resultItem.url} target="_blank" rel="noreferrer" className="hover:underline">{resultItem.url}</a></div>
+                                                        </div>
+                                                    )}
+                                                    <div className="flex flex-col sm:flex-row sm:items-start py-3 border-b border-slate-100 gap-1 sm:gap-4">
+                                                        <div className="font-semibold text-slate-700 sm:w-1/3 flex items-center gap-2.5"><div className="bg-slate-100 p-1.5 rounded-md w-7 h-7 flex items-center justify-center"><i className="fa-solid fa-briefcase text-slate-500 text-xs"></i></div> Posizione</div>
+                                                        <div className="text-slate-800 font-semibold sm:w-2/3">{resultItem.posizione}</div>
+                                                    </div>
+                                                    <div className="flex flex-col sm:flex-row sm:items-start py-3 border-b border-emerald-100 bg-emerald-50/30 gap-1 sm:gap-4 rounded-lg my-1 px-2">
+                                                        <div className="font-semibold text-slate-700 sm:w-1/3 flex items-center gap-2.5"><div className="bg-emerald-100 p-1.5 rounded-md w-7 h-7 flex items-center justify-center"><i className="fa-solid fa-euro-sign text-emerald-600 text-xs"></i></div> RAL / Offerta</div>
+                                                        <div className="text-emerald-700 font-bold sm:w-2/3">{resultItem.ral}</div>
+                                                    </div>
+                                                    <div className="flex flex-col sm:flex-row sm:items-start py-3 border-b border-slate-100 gap-1 sm:gap-4">
+                                                        <div className="font-semibold text-slate-700 sm:w-1/3 flex items-center gap-2.5"><div className="bg-slate-100 p-1.5 rounded-md w-7 h-7 flex items-center justify-center"><i className="fa-solid fa-graduation-cap text-slate-500 text-xs"></i></div> Requisiti</div>
+                                                        <div className="text-slate-700 sm:w-2/3 text-xs leading-relaxed"><span className="font-semibold block mb-1">Competenze: {resultItem.competenze.join(', ')}</span>Exp: {resultItem.anni_esperienza} | Edu: {resultItem.titolo_studio}</div>
+                                                    </div>
+
+                                                    {/* Accordion Testo Originale */}
+                                                    {resultItem.testo_originale && (
+                                                        <div className="mt-2 py-2 border-t border-slate-100 border-dashed">
+                                                            <button 
+                                                                onClick={() => setExpandedTextIndex(expandedTextIndex === index ? null : index)}
+                                                                className="text-xs font-semibold text-slate-500 hover:text-blue-600 flex items-center gap-1 w-full justify-center"
+                                                            >
+                                                                {expandedTextIndex === index ? <><i className="fa-solid fa-chevron-up"></i> Nascondi Testo Originale</> : <><i className="fa-solid fa-chevron-down"></i> Mostra Testo Originale Salvato</>}
+                                                            </button>
+                                                            {expandedTextIndex === index && (
+                                                                <div className="mt-3 p-3 bg-slate-50 rounded-xl text-xs text-slate-600 whitespace-pre-wrap font-mono leading-relaxed border border-slate-200 max-h-[300px] overflow-y-auto">
+                                                                    {resultItem.testo_originale}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* TAB ANALYTICS & IMPORT */}
+                        {activeTab === 'analytics' && (
+                            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                
+                                {/* Action Bar (Upload / Download) */}
+                                <div className="flex flex-col sm:flex-row gap-4 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                                    <div className="flex-1">
+                                        <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-2"><i className="fa-solid fa-upload text-blue-600"></i> Importa Dati Precedenti</h3>
+                                        <p className="text-sm text-slate-500 mb-3">Carica un file CSV generato in precedenza da questa app per aggiungere gli annunci storici al database attuale.</p>
+                                        <input 
+                                            type="file" accept=".csv" ref={fileInputRef} onChange={handleFileUpload}
+                                            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+                                        />
+                                    </div>
+                                    <div className="hidden sm:block w-px bg-slate-200 mx-2"></div>
+                                    <div className="flex-1 flex flex-col justify-center border-t sm:border-t-0 pt-4 sm:pt-0">
+                                        <button
+                                            onClick={downloadCSV} disabled={exporting || results.length === 0}
+                                            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-4 px-6 rounded-xl shadow-sm transition-colors flex justify-center items-center gap-2 disabled:bg-slate-300"
+                                        >
+                                            {exporting ? <i className="fa-solid fa-spinner fa-spin"></i> : <i className="fa-solid fa-download"></i>}
+                                            Esporta Database CSV ({results.length} record)
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Dashboard Analitica */}
+                                {analyticsData ? (
+                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                                        
+                                        {/* Global Stats */}
+                                        <div className="lg:col-span-1 space-y-6">
+                                            <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl shadow-md p-6 text-white relative overflow-hidden">
+                                                <i className="fa-solid fa-arrow-trend-up absolute -bottom-4 -right-4 text-9xl opacity-10"></i>
+                                                <h3 className="font-semibold text-blue-100 mb-1">RAL Media di Mercato</h3>
+                                                <div className="text-4xl font-bold mb-4">
+                                                    {analyticsData.globalAvg > 0 ? `€ ${analyticsData.globalAvg.toLocaleString('it-IT')}` : 'N.D.'}
+                                                </div>
+                                                <div className="flex gap-2 text-sm text-blue-100 bg-black/20 p-3 rounded-lg backdrop-blur-sm">
+                                                    <i className="fa-solid fa-calculator shrink-0 mt-0.5"></i>
+                                                    <p>Calcolata su <b>{analyticsData.totalAnnunciConRal}</b> annunci (su {analyticsData.totalAnnunci} totali nel DB) che dichiarano un compenso numerico.</p>
+                                                </div>
+                                            </div>
+
+                                            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                                                <h3 className="font-bold text-slate-800 mb-4">Metriche DB</h3>
+                                                <div className="space-y-3">
+                                                    <div className="flex justify-between p-3 bg-slate-50 rounded-lg">
+                                                        <span className="text-slate-600">Annunci a DB</span>
+                                                        <span className="font-bold text-slate-800">{analyticsData.totalAnnunci}</span>
+                                                    </div>
+                                                    <div className="flex justify-between p-3 bg-slate-50 rounded-lg">
+                                                        <span className="text-slate-600">Tasso di trasparenza RAL</span>
+                                                        <span className="font-bold text-emerald-600">
+                                                            {analyticsData.totalAnnunci > 0 ? Math.round((analyticsData.totalAnnunciConRal / analyticsData.totalAnnunci) * 100) : 0}%
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Keyword Analysis */}
+                                        <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                                            <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-2">
+                                                <i className="fa-solid fa-chart-column text-blue-600"></i> Analisi RAL per Keyword nel Ruolo
+                                            </h3>
+                                            <p className="text-sm text-slate-500 mb-6">Valori medi calcolati filtrando i job title che contengono termini chiave.</p>
+                                            
+                                            {analyticsData.keywordAverages.length > 0 ? (
+                                                <div className="space-y-4">
+                                                    {analyticsData.keywordAverages.map((kw, idx) => {
+                                                        // Calcola la percentuale per la barra di sfondo
+                                                        const maxRal = Math.max(...analyticsData.keywordAverages.map(k => k.avgRal || 0));
+                                                        const percentage = kw.avgRal ? (kw.avgRal / maxRal) * 100 : 0;
+                                                        
+                                                        return (
+                                                            <div key={idx} className="relative">
+                                                                <div className="flex justify-between text-sm mb-1 px-1 relative z-10">
+                                                                    <span className="font-semibold text-slate-700">{kw.keyword} <span className="text-slate-400 font-normal text-xs ml-1">({kw.count} annunci)</span></span>
+                                                                    <span className="font-bold text-emerald-700">{kw.avgRal ? `€ ${kw.avgRal.toLocaleString('it-IT')}` : 'RAL N.D.'}</span>
+                                                                </div>
+                                                                <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                                                                    <div 
+                                                                        className="h-full bg-blue-500 rounded-full transition-all duration-1000"
+                                                                        style={{ width: `${percentage}%` }}
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                            ) : (
+                                                <div className="text-center py-10 text-slate-400">
+                                                    <i className="fa-solid fa-chart-column text-5xl mx-auto mb-3 opacity-20"></i>
+                                                    <p>Non ci sono ancora dati sufficienti per le keyword tracciate.</p>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                    </div>
+                                ) : (
+                                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-10 text-center text-slate-500">
+                                        Aggiungi o importa annunci per visualizzare le statistiche e la dashboard di mercato.
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
