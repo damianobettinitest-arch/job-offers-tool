@@ -61,6 +61,7 @@
                 if (apiKey.trim()) {
                     localStorage.setItem('gemini_api_key', apiKey.trim());
                     setShowApiKeyInput(false);
+                    setError(null);
                 }
             };
 
@@ -69,7 +70,12 @@
                 for (let i = 0; i < retries; i++) {
                     try {
                         const response = await fetch(url, options);
-                        if (!response.ok) throw new Error(`Errore di rete: ${response.status}`);
+                        if (!response.ok) {
+                            // Estrae il vero errore API inviato da Google
+                            const errorData = await response.json().catch(() => ({}));
+                            const errorMessage = errorData.error?.message || `Errore HTTP ${response.status}`;
+                            throw new Error(errorMessage);
+                        }
                         return await response.json();
                     } catch (err) {
                         if (i === retries - 1) throw err;
@@ -117,7 +123,8 @@
                 };
 
                 try {
-                    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                    // Utilizziamo il modello 1.5-flash che è stabile e accessibile da tutte le chiavi pubbliche
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
                     const data = await fetchWithRetry(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
 
                     const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -134,12 +141,15 @@
                         setInputText(''); 
                         setInputUrl(''); 
                     } else {
-                        throw new Error("Risposta non valida dall'API.");
+                        throw new Error("Risposta vuota o non valida dall'API.");
                     }
                 } catch (err) {
-                    console.error(err);
-                    setError("Si è verificato un errore. Assicurati che la tua API Key di Gemini sia valida.");
-                    if(err.message && (err.message.includes("400") || err.message.includes("403"))) setShowApiKeyInput(true);
+                    console.error("Dettagli errore API:", err);
+                    // Mostra l'errore effettivo in modo da capire subito cosa non va
+                    setError(`Errore: ${err.message}`);
+                    if(err.message && (err.message.includes("400") || err.message.includes("403") || err.message.includes("API key not valid"))) {
+                        setShowApiKeyInput(true);
+                    }
                 } finally {
                     setLoading(false);
                 }
